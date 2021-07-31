@@ -1,5 +1,6 @@
 all: compile
 
+SRCS := $(wildcard src/*)
 POMOBCN_INO := PomodoroBeacon.ino
 COMPILE_STAMP := .compile-stamp
 
@@ -8,7 +9,7 @@ TARGET_PORT ?= /dev/ttyACM0
 
 compile: $(COMPILE_STAMP)
 
-$(COMPILE_STAMP): $(POMOBCN_INO)
+$(COMPILE_STAMP): $(POMOBCN_INO) $(SRCS)
 	rm -f $(COMPILE_STAMP)
 	arduino-cli compile --fqbn $(TARGET_FQBN) --libraries lib/ .
 	touch $@
