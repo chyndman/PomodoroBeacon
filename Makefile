@@ -11,7 +11,7 @@ compile: $(COMPILE_STAMP)
 
 $(COMPILE_STAMP): $(POMOBCN_INO) $(SRCS)
 	rm -f $(COMPILE_STAMP)
-	arduino-cli compile --fqbn $(TARGET_FQBN) --libraries lib/ .
+	arduino-cli compile --warnings all --fqbn $(TARGET_FQBN) --libraries lib/ .
 	touch $@
 
 upload: $(COMPILE_STAMP)
