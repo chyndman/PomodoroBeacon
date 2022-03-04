@@ -4,30 +4,45 @@
 #define TICK_HZ 50
 #define TICK_PERIOD_USEC 20000
 
+enum Color {
+    COLOR_R = (1U << 0),
+    COLOR_G = (1U << 1),
+    COLOR_B = (1U << 2),
+
+    COLOR_RED = COLOR_R,
+    COLOR_GREEN = COLOR_G,
+    COLOR_BLUE = COLOR_B,
+
+    COLOR_CYAN = COLOR_G | COLOR_B,
+    COLOR_MAGENTA = COLOR_R | COLOR_B,
+    COLOR_YELLOW = COLOR_R | COLOR_G,
+
+    COLOR_BLACK = 0,
+    COLOR_WHITE = COLOR_R | COLOR_G | COLOR_B
+};
+
 enum BeaconMode {
-    NONE = 0,
-    INIT,
-    SLEEP,
-    WORK,
-    BREAK,
-    GAME,
-    HIBERNATE
+    BM_NONE = 0,
+    BM_INIT,
+    BM_SLEEP,
+    BM_WORK,
+    BM_BREAK,
+    BM_GAME,
+    BM_HIBERNATE
 };
 
 struct BeaconModeParam {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
+    int color;
     unsigned periodSecs;
     bool periodOnce;
 };
 
 enum LedPattern {
-    OFF = 0,
-    DIM,
-    ON,
-    BLINK_SLOW,
-    BLINK_STROBE
+    LP_OFF = 0,
+    LP_DIM,
+    LP_ON,
+    LP_BLINK_SLOW,
+    LP_BLINK_STROBE
 };
 
 struct LedPatternParam {
@@ -36,34 +51,37 @@ struct LedPatternParam {
     uint32_t pulses;
 };
 
+void colorToRgb(uint8_t *r, uint8_t *g, uint8_t *b, int color)
+{
+    *r = (color & COLOR_R) ? 0xFF : 0;
+    *g = (color & COLOR_G) ? 0xFF : 0;
+    *b = (color & COLOR_B) ? 0xFF : 0;
+}
+
 void setBeaconModeParam(BeaconModeParam *param, BeaconMode bm)
 {
     memset(param, 0, sizeof(*param));
     unsigned pdMins = 0;
     switch (bm) {
-    case BeaconMode::INIT:
-        param->r = 0xFF;
-        param->g = 0xFF;
-        param->b = 0xFF;
+    case BM_INIT:
+        param->color = COLOR_WHITE;
         break;
-    case BeaconMode::WORK:
-        param->g = 0xFF;
-        param->b = 0xFF;
+    case BM_WORK:
+        param->color = COLOR_CYAN;
         pdMins = 25;
         param->periodOnce = true;
         break;
-    case BeaconMode::BREAK:
-        param->g = 0xFF;
-        pdMins = 5;
+    case BM_BREAK:
+        param->color = COLOR_GREEN;
+        pdMins = 1;
         param->periodOnce = true;
         break;
-    case BeaconMode::GAME:
-        param->r = 0xFF;
-        param->b = 0xFF;
+    case BM_GAME:
+        param->color = COLOR_MAGENTA;
         pdMins = 15;
         break;
-    case BeaconMode::HIBERNATE:
-        param->r = 0xFF;
+    case BM_HIBERNATE:
+        param->color = COLOR_BLUE;
         pdMins = 12 * 60;
         break;
     default:
@@ -77,18 +95,18 @@ void setLedPatternParam(LedPatternParam *param, LedPattern lp)
 {
     memset(param, 0, sizeof(*param));
     switch (lp) {
-    case LedPattern::DIM:
+    case LP_DIM:
         param->dimShift = 5;
         // fall through
-    case LedPattern::ON:
+    case LP_ON:
         param->pulses = 0xFFFFFFFF;
         break;
-    case LedPattern::BLINK_SLOW:
+    case LP_BLINK_SLOW:
         param->paceShift = 2;
         param->pulses = 0xFFFF0000;
         break;
-    case LedPattern::BLINK_STROBE:
-        param->pulses = 0xD8600000;
+    case LP_BLINK_STROBE:
+        param->pulses = 0xE3800000;
         break;
     default:
         break;
@@ -99,7 +117,7 @@ TWIST g_twist;
 uint16_t g_count = 0x0100;
 unsigned long g_tickTwistRotation = 0;
 
-BeaconMode g_mode = BeaconMode::INIT;
+BeaconMode g_mode = BM_INIT;
 BeaconModeParam g_modeParam;
 
 void setup()
@@ -111,7 +129,8 @@ void setup()
 
 bool eventTwistRotation(unsigned long tick)
 {
-    static BeaconMode mainModeRing[] = { WORK, BREAK, GAME, HIBERNATE };
+    static BeaconMode mainModeRing[] = {
+        BM_WORK, BM_BREAK, BM_GAME, BM_HIBERNATE };
     bool result = false;
     uint16_t count = (uint16_t)g_twist.getCount();
     if (count != g_count) {
@@ -130,35 +149,36 @@ void tickTwistLed(unsigned long tick)
 {
     unsigned long secsTwistRotation = (tick - g_tickTwistRotation) / TICK_HZ;
 
-    LedPattern lp = LedPattern::DIM;
+    LedPattern lp = LP_DIM;
     if (secsTwistRotation < 5)
-        lp = LedPattern::ON;
+        lp = LP_ON;
     else if (g_modeParam.periodOnce && g_modeParam.periodSecs <= secsTwistRotation)
-        lp = LedPattern::BLINK_STROBE;
+        lp = LP_BLINK_STROBE;
     else if ((secsTwistRotation + 30) % g_modeParam.periodSecs < 30)
-        lp = LedPattern::BLINK_SLOW;
+        lp = LP_BLINK_SLOW;
 
     LedPatternParam param;
     setLedPatternParam(&param, lp);
 
     uint32_t sampleMask = 0x80000000 >> ((tick >> param.paceShift) & 0x1F);
-    uint8_t channelMask = (param.pulses & sampleMask) ? 0xFF : 0;
+    unsigned dimShift = (param.pulses & sampleMask) ? param.dimShift : 8;
 
-    uint8_t r = channelMask & (g_modeParam.r >> param.dimShift);
-    uint8_t g = channelMask & (g_modeParam.g >> param.dimShift);
-    uint8_t b = channelMask & (g_modeParam.b >> param.dimShift);
-    g_twist.setColor(r, g, b);
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    colorToRgb(&r, &g, &b, g_modeParam.color);
+    g_twist.setColor(r >> dimShift, g >> dimShift, b >> dimShift);
 }
 
 void loop()
 {
     static unsigned long tick = 1;
-    
+
     unsigned long usec = micros();
     unsigned long usec_end = usec + TICK_PERIOD_USEC;
     if (usec_end < usec)
         return;
-    
+
     if (eventTwistRotation(tick))
         return;
 
