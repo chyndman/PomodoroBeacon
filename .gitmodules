@@ -1,6 +1,0 @@
-[submodule "lib/SparkFun_RV8803"]
-	path = lib/SparkFun_RV8803
-	url = https://github.com/sparkfun/SparkFun_RV-8803_Arduino_Library.git
-[submodule "lib/SparkFun_Qwiic_Twist_Arduino_Library"]
-	path = lib/SparkFun_Qwiic_Twist_Arduino_Library
-	url = https://github.com/sparkfun/SparkFun_Qwiic_Twist_Arduino_Library

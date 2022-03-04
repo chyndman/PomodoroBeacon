@@ -1,8 +1,0 @@
-#pragma once
-
-enum
-{
-    POMOBCN_SIG_NONE = 0,
-    POMOBCN_SIG_TWIST_TURNED,
-    POMOBCN_SIG_COUNTDOWN_EXPIRED,
-};
