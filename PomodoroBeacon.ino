@@ -73,7 +73,7 @@ void setBeaconModeParam(BeaconModeParam *param, BeaconMode bm)
         break;
     case BM_BREAK:
         param->color = COLOR_GREEN;
-        pdMins = 1;
+        pdMins = 5;
         param->periodOnce = true;
         break;
     case BM_GAME:
