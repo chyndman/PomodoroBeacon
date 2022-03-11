@@ -55,6 +55,36 @@ struct LedPatternParam {
     uint32_t pulses;
 };
 
+#define DIM_SHIFT_STD 5
+
+#define RAINBOW_PHASE_STEPS 0xFF
+#define RAINBOW_PHASE_COUNT 6
+#define RAINBOW_STEPS (RAINBOW_PHASE_COUNT * RAINBOW_PHASE_STEPS)
+#define RAINBOW_PHASE_START_R 5
+#define RAINBOW_PHASE_START_G 3
+#define RAINBOW_PHASE_START_B 1
+
+uint8_t rainbowChannel(unsigned step, unsigned phaseStart)
+{
+    unsigned shiftedStep =
+        (step + (phaseStart * RAINBOW_PHASE_STEPS)) % RAINBOW_STEPS;
+    unsigned shiftedPhase = shiftedStep / RAINBOW_PHASE_STEPS;
+    switch (shiftedPhase) {
+    case 0:
+    case 1:
+        return 0xFF;
+    case 2:
+        return 0xFF - (step % RAINBOW_PHASE_STEPS);
+    case 3:
+    case 4:
+        return 0;
+    case 5:
+        return (step % RAINBOW_PHASE_STEPS);
+    default:
+        return 0;
+    }
+}
+
 void colorToRgb(uint8_t *r, uint8_t *g, uint8_t *b, int color)
 {
     *r = (color & COLOR_R) ? 0xFF : 0;
@@ -93,7 +123,7 @@ void setLedPatternParam(LedPatternParam *param, LedPattern lp)
     memset(param, 0, sizeof(*param));
     switch (lp) {
     case LP_DIM:
-        param->dimShift = 5;
+        param->dimShift = DIM_SHIFT_STD;
         // fall through
     case LP_ON:
         param->pulses = 0xFFFFFFFF;
@@ -115,7 +145,7 @@ TWIST g_twist;
 unsigned long g_tick;
 
 uint16_t g_count;
-unsigned long g_tickTwistRotation;
+unsigned long g_tickTwistEvent;
 
 BeaconMode g_mode;
 
@@ -124,10 +154,11 @@ PomodoroStateParam g_pomoParam;
 
 void softReset(void)
 {
+    g_twist.setColor(0xFF, 0xFF, 0xFF);
     g_tick = 0;
     g_count = 0x0100;
     g_twist.setCount(g_count);
-    g_tickTwistRotation = 0;
+    g_tickTwistEvent = 0;
     g_mode = BM_INIT;
     g_pomoState = POMOST_WORK;
     setPomodoroStateParam(&g_pomoParam, g_pomoState);
@@ -145,8 +176,10 @@ bool eventTwistButton()
     bool result = false;
     if (g_twist.isClicked()) {
         result = true;
-        BeaconMode nextMode = static_cast<BeaconMode>((g_mode + 1) % BM_COUNT);
-        g_mode = nextMode;
+        g_tickTwistEvent = g_tick;
+        g_mode = static_cast<BeaconMode>((g_mode + 1) % BM_COUNT);
+        if (BM_INIT == g_mode)
+            softReset();
     }
     return result;
 }
@@ -157,7 +190,7 @@ bool eventTwistRotation()
     uint16_t count = (uint16_t)g_twist.getCount();
     if (count != g_count) {
         result = true;
-        g_tickTwistRotation = g_tick;
+        g_tickTwistEvent = g_tick;
 
         g_pomoState =
             static_cast<PomodoroState>(
@@ -172,16 +205,23 @@ bool eventTwistRotation()
     return result;
 }
 
+void getRgbInit(uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    *r = rainbowChannel(g_tick % RAINBOW_STEPS, RAINBOW_PHASE_START_R);
+    *g = rainbowChannel(g_tick % RAINBOW_STEPS, RAINBOW_PHASE_START_G);
+    *b = rainbowChannel(g_tick % RAINBOW_STEPS, RAINBOW_PHASE_START_B);
+}
+
 void getRgbPomo(uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    unsigned long secsTwistRotation = (g_tick - g_tickTwistRotation) / TICK_HZ;
+    unsigned long secsTwistEvent = (g_tick - g_tickTwistEvent) / TICK_HZ;
 
     LedPattern lp = LP_DIM;
-    if (secsTwistRotation < 5)
+    if (secsTwistEvent < 5)
         lp = LP_ON;
-    else if (g_pomoParam.periodOnce && g_pomoParam.periodSecs <= secsTwistRotation)
+    else if (g_pomoParam.periodOnce && g_pomoParam.periodSecs <= secsTwistEvent)
         lp = LP_BLINK_STROBE;
-    else if ((secsTwistRotation + 30) % g_pomoParam.periodSecs < 30)
+    else if ((secsTwistEvent + 30) % g_pomoParam.periodSecs < 30)
         lp = LP_BLINK_SLOW;
 
     LedPatternParam param;
@@ -198,23 +238,26 @@ void getRgbPomo(uint8_t *r, uint8_t *g, uint8_t *b)
 
 void tickTwistLed()
 {
-    uint8_t r = 0xff;
-    uint8_t g = 0xff;
-    uint8_t b = 0xff;
+    uint8_t r = 0xFF;
+    uint8_t g = 0xFF;
+    uint8_t b = 0xFF;
 
-    switch (g_mode) {
-    case BM_INIT:
-        break;
-    case BM_POMO:
-        getRgbPomo(&r, &g, &b);
-        break;
-    case BM_SLEEP:
-        r = 0x1f;
-        g = 0;
-        b = 0;
-        break;
-    default:
-        break;
+    if (!g_twist.isPressed()) {
+        switch (g_mode) {
+        case BM_INIT:
+            getRgbInit(&r, &g, &b);
+            break;
+        case BM_POMO:
+            getRgbPomo(&r, &g, &b);
+            break;
+        case BM_SLEEP:
+            r = 0xFF >> DIM_SHIFT_STD;
+            g = 0;
+            b = 0;
+            break;
+        default:
+            break;
+        }
     }
 
     g_twist.setColor(r, g, b);
