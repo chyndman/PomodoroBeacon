@@ -22,16 +22,20 @@ enum Color {
 };
 
 enum BeaconMode {
-    BM_NONE = 0,
     BM_INIT,
+    BM_POMO,
     BM_SLEEP,
-    BM_WORK,
-    BM_BREAK,
-    BM_GAME,
-    BM_HIBERNATE
+    BM_COUNT
 };
 
-struct BeaconModeParam {
+enum PomodoroState {
+    POMOST_WORK,
+    POMOST_BREAK,
+    POMOST_GAME,
+    POMOST_COUNT
+};
+
+struct PomodoroStateParam {
     int color;
     unsigned periodSecs;
     bool periodOnce;
@@ -58,31 +62,24 @@ void colorToRgb(uint8_t *r, uint8_t *g, uint8_t *b, int color)
     *b = (color & COLOR_B) ? 0xFF : 0;
 }
 
-void setBeaconModeParam(BeaconModeParam *param, BeaconMode bm)
+void setPomodoroStateParam(PomodoroStateParam *param, PomodoroState st)
 {
     memset(param, 0, sizeof(*param));
     unsigned pdMins = 0;
-    switch (bm) {
-    case BM_INIT:
-        param->color = COLOR_WHITE;
-        break;
-    case BM_WORK:
+    switch (st) {
+    case POMOST_WORK:
         param->color = COLOR_CYAN;
         pdMins = 25;
         param->periodOnce = true;
         break;
-    case BM_BREAK:
+    case POMOST_BREAK:
         param->color = COLOR_GREEN;
         pdMins = 5;
         param->periodOnce = true;
         break;
-    case BM_GAME:
-        param->color = COLOR_MAGENTA;
+    case POMOST_GAME:
+        param->color = COLOR_YELLOW;
         pdMins = 15;
-        break;
-    case BM_HIBERNATE:
-        param->color = COLOR_BLUE;
-        pdMins = 12 * 60;
         break;
     default:
         break;
@@ -114,76 +111,128 @@ void setLedPatternParam(LedPatternParam *param, LedPattern lp)
 }
 
 TWIST g_twist;
-uint16_t g_count = 0x0100;
-unsigned long g_tickTwistRotation = 0;
 
-BeaconMode g_mode = BM_INIT;
-BeaconModeParam g_modeParam;
+unsigned long g_tick;
+
+uint16_t g_count;
+unsigned long g_tickTwistRotation;
+
+BeaconMode g_mode;
+
+PomodoroState g_pomoState;
+PomodoroStateParam g_pomoParam;
+
+void softReset(void)
+{
+    g_tick = 0;
+    g_count = 0x0100;
+    g_twist.setCount(g_count);
+    g_tickTwistRotation = 0;
+    g_mode = BM_INIT;
+    g_pomoState = POMOST_WORK;
+    setPomodoroStateParam(&g_pomoParam, g_pomoState);
+}
 
 void setup()
 {
     g_twist.begin();
-    g_twist.setCount(g_count);
     Serial.begin(115200);
+    softReset();
 }
 
-bool eventTwistRotation(unsigned long tick)
+bool eventTwistButton()
 {
-    static BeaconMode mainModeRing[] = {
-        BM_WORK, BM_BREAK, BM_GAME, BM_HIBERNATE };
     bool result = false;
-    uint16_t count = (uint16_t)g_twist.getCount();
-    if (count != g_count) {
-        g_count = count;
+    if (g_twist.isClicked()) {
         result = true;
-        g_tickTwistRotation = tick;
-
-        g_mode = mainModeRing[
-            count % (sizeof(mainModeRing) / sizeof(mainModeRing[0]))];
-        setBeaconModeParam(&g_modeParam, g_mode);
+        BeaconMode nextMode = static_cast<BeaconMode>((g_mode + 1) % BM_COUNT);
+        g_mode = nextMode;
     }
     return result;
 }
 
-void tickTwistLed(unsigned long tick)
+bool eventTwistRotation()
 {
-    unsigned long secsTwistRotation = (tick - g_tickTwistRotation) / TICK_HZ;
+    bool result = false;
+    uint16_t count = (uint16_t)g_twist.getCount();
+    if (count != g_count) {
+        result = true;
+        g_tickTwistRotation = g_tick;
+
+        g_pomoState =
+            static_cast<PomodoroState>(
+                (g_pomoState
+                 + POMOST_COUNT
+                 + (count - g_count))
+                % POMOST_COUNT);
+        setPomodoroStateParam(&g_pomoParam, g_pomoState);
+
+        g_count = count;
+    }
+    return result;
+}
+
+void getRgbPomo(uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    unsigned long secsTwistRotation = (g_tick - g_tickTwistRotation) / TICK_HZ;
 
     LedPattern lp = LP_DIM;
     if (secsTwistRotation < 5)
         lp = LP_ON;
-    else if (g_modeParam.periodOnce && g_modeParam.periodSecs <= secsTwistRotation)
+    else if (g_pomoParam.periodOnce && g_pomoParam.periodSecs <= secsTwistRotation)
         lp = LP_BLINK_STROBE;
-    else if ((secsTwistRotation + 30) % g_modeParam.periodSecs < 30)
+    else if ((secsTwistRotation + 30) % g_pomoParam.periodSecs < 30)
         lp = LP_BLINK_SLOW;
 
     LedPatternParam param;
     setLedPatternParam(&param, lp);
 
-    uint32_t sampleMask = 0x80000000 >> ((tick >> param.paceShift) & 0x1F);
+    uint32_t sampleMask = 0x80000000 >> ((g_tick >> param.paceShift) & 0x1F);
     unsigned dimShift = (param.pulses & sampleMask) ? param.dimShift : 8;
 
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-    colorToRgb(&r, &g, &b, g_modeParam.color);
-    g_twist.setColor(r >> dimShift, g >> dimShift, b >> dimShift);
+    colorToRgb(r, g, b, g_pomoParam.color);
+    *r >>= dimShift;
+    *g >>= dimShift;
+    *b >>= dimShift;
+}
+
+void tickTwistLed()
+{
+    uint8_t r = 0xff;
+    uint8_t g = 0xff;
+    uint8_t b = 0xff;
+
+    switch (g_mode) {
+    case BM_INIT:
+        break;
+    case BM_POMO:
+        getRgbPomo(&r, &g, &b);
+        break;
+    case BM_SLEEP:
+        r = 0x1f;
+        g = 0;
+        b = 0;
+        break;
+    default:
+        break;
+    }
+
+    g_twist.setColor(r, g, b);
 }
 
 void loop()
 {
-    static unsigned long tick = 1;
-
     unsigned long usec = micros();
     unsigned long usec_end = usec + TICK_PERIOD_USEC;
     if (usec_end < usec)
         return;
 
-    if (eventTwistRotation(tick))
+    if (eventTwistButton()
+        || eventTwistRotation())
         return;
 
-    tick++;
-    tickTwistLed(tick);
+    g_tick++;
+    tickTwistLed();
 
     while (usec_end > micros()) {}
 }
