@@ -174,8 +174,11 @@ void setup()
 bool eventTwistButton()
 {
     bool result = false;
-    if (g_twist.isClicked()) {
+    if (g_twist.isPressed()) {
         result = true;
+        g_twist.setColor(0xFF, 0xFF, 0xFF);
+        while (g_twist.isPressed()) {};
+
         g_tickTwistEvent = g_tick;
         g_mode = static_cast<BeaconMode>((g_mode + 1) % BM_COUNT);
         if (BM_INIT == g_mode)
@@ -242,22 +245,20 @@ void tickTwistLed()
     uint8_t g = 0xFF;
     uint8_t b = 0xFF;
 
-    if (!g_twist.isPressed()) {
-        switch (g_mode) {
-        case BM_INIT:
-            getRgbInit(&r, &g, &b);
-            break;
-        case BM_POMO:
-            getRgbPomo(&r, &g, &b);
-            break;
-        case BM_SLEEP:
-            r = 0xFF >> DIM_SHIFT_STD;
-            g = 0;
-            b = 0;
-            break;
-        default:
-            break;
-        }
+    switch (g_mode) {
+    case BM_INIT:
+        getRgbInit(&r, &g, &b);
+        break;
+    case BM_POMO:
+        getRgbPomo(&r, &g, &b);
+        break;
+    case BM_SLEEP:
+        r = 0xFF >> DIM_SHIFT_STD;
+        g = 0;
+        b = 0;
+        break;
+    default:
+        break;
     }
 
     g_twist.setColor(r, g, b);
