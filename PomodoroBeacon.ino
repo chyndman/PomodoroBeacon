@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <SparkFun_Qwiic_Twist_Arduino_Library.h>
+#include <SparkFun_RV8803.h>
 
 #define TICK_HZ 50
 #define TICK_PERIOD_USEC 20000
@@ -22,16 +23,17 @@ enum Color {
 };
 
 enum BeaconMode {
-    BM_INIT,
+    BM_RAINBOW,
     BM_POMO,
-    BM_SLEEP,
     BM_COUNT
 };
 
 enum PomodoroState {
+    POMOST_START,
     POMOST_WORK,
     POMOST_BREAK,
     POMOST_GAME,
+    POMOST_SLEEP,
     POMOST_COUNT
 };
 
@@ -97,6 +99,10 @@ void setPomodoroStateParam(PomodoroStateParam *param, PomodoroState st)
     memset(param, 0, sizeof(*param));
     unsigned pdMins = 0;
     switch (st) {
+    case POMOST_START:
+        param->color = COLOR_BLUE;
+        param->periodSecs = 1;
+        break;
     case POMOST_WORK:
         param->color = COLOR_CYAN;
         pdMins = 25;
@@ -111,11 +117,17 @@ void setPomodoroStateParam(PomodoroStateParam *param, PomodoroState st)
         param->color = COLOR_YELLOW;
         pdMins = 15;
         break;
+    case POMOST_SLEEP:
+        param->color = COLOR_RED;
+        pdMins = 60 * 24;
+        param->periodOnce = true;
+        break;
     default:
         break;
     }
 
-    param->periodSecs = pdMins * 60;
+    if (pdMins)
+        param->periodSecs = pdMins * 60;
 }
 
 void setLedPatternParam(LedPatternParam *param, LedPattern lp)
@@ -141,48 +153,52 @@ void setLedPatternParam(LedPatternParam *param, LedPattern lp)
 }
 
 TWIST g_twist;
+RV8803 g_rtc;
 
 unsigned long g_tick;
-
-uint16_t g_count;
-unsigned long g_tickTwistEvent;
-
 BeaconMode g_mode;
-
 PomodoroState g_pomoState;
 PomodoroStateParam g_pomoParam;
 
-void softReset(void)
+void softReset(BeaconMode mode, PomodoroState pomoState)
 {
-    g_twist.setColor(0xFF, 0xFF, 0xFF);
     g_tick = 0;
-    g_count = 0x0100;
-    g_twist.setCount(g_count);
-    g_tickTwistEvent = 0;
-    g_mode = BM_INIT;
-    g_pomoState = POMOST_WORK;
+    g_mode = mode;
+    g_pomoState = pomoState;
     setPomodoroStateParam(&g_pomoParam, g_pomoState);
 }
 
 void setup()
 {
+    Serial.begin(9600);
+
     g_twist.begin();
-    Serial.begin(115200);
-    softReset();
+    g_twist.setColor(0xFF, 0xFF, 0xFF);
+    g_twist.setCount(0);
+
+    g_rtc.begin();
+    g_rtc.updateTime();
+#ifdef RTC_SET_BUILD
+    g_rtc.setToCompilerTime();
+#endif
+
+    softReset(BM_RAINBOW, POMOST_START);
 }
 
 bool eventTwistButton()
 {
     bool result = false;
     if (g_twist.isPressed()) {
+#ifdef RTC_SET_BUILD
+        g_rtc.setSeconds(0);
+        g_rtc.setMinutes(g_rtc.getMinutes() + 1);
+#endif
         result = true;
         g_twist.setColor(0xFF, 0xFF, 0xFF);
-        while (g_twist.isPressed()) {};
-
-        g_tickTwistEvent = g_tick;
-        g_mode = static_cast<BeaconMode>((g_mode + 1) % BM_COUNT);
-        if (BM_INIT == g_mode)
-            softReset();
+        while (g_twist.isPressed()) {}
+        softReset(
+            static_cast<BeaconMode>((g_mode + 1) % BM_COUNT),
+            g_pomoState);
     }
     return result;
 }
@@ -190,25 +206,48 @@ bool eventTwistButton()
 bool eventTwistRotation()
 {
     bool result = false;
-    uint16_t count = (uint16_t)g_twist.getCount();
-    if (count != g_count) {
+    int16_t count = g_twist.getCount();
+    if (count) {
+        g_twist.setCount(0);
         result = true;
-        g_tickTwistEvent = g_tick;
-
-        g_pomoState =
+        softReset(
+            g_mode,
             static_cast<PomodoroState>(
                 (g_pomoState
-                 + POMOST_COUNT
-                 + (count - g_count))
-                % POMOST_COUNT);
-        setPomodoroStateParam(&g_pomoParam, g_pomoState);
-
-        g_count = count;
+                 + (count > 0 ? 1 : (POMOST_COUNT - 1)))
+                % POMOST_COUNT));
     }
     return result;
 }
 
-void getRgbInit(uint8_t *r, uint8_t *g, uint8_t *b)
+bool eventRtcHour()
+{
+    bool result = false;
+    if (0 == (g_tick + 1) % (TICK_HZ * 10)) {
+        uint8_t prevHour = g_rtc.getHours();
+        g_rtc.updateTime();
+        Serial.println(g_rtc.stringTime8601());
+        uint8_t hour = g_rtc.getHours();
+        if (prevHour != hour) {
+            PomodoroState pomoStateNew = g_pomoState;
+            if (6 == hour)
+                pomoStateNew = POMOST_START;
+            else if (23 == hour)
+                pomoStateNew = POMOST_SLEEP;
+
+            if (pomoStateNew != g_pomoState) {
+                g_pomoState = pomoStateNew;
+                if (BM_POMO == g_mode) {
+                    result = true;
+                    softReset(g_mode, pomoStateNew);
+                }
+            }
+        }
+    }
+    return result;
+}
+
+void getRgbRainbow(uint8_t *r, uint8_t *g, uint8_t *b)
 {
     *r = rainbowChannel(g_tick % RAINBOW_STEPS, RAINBOW_PHASE_START_R);
     *g = rainbowChannel(g_tick % RAINBOW_STEPS, RAINBOW_PHASE_START_G);
@@ -217,14 +256,14 @@ void getRgbInit(uint8_t *r, uint8_t *g, uint8_t *b)
 
 void getRgbPomo(uint8_t *r, uint8_t *g, uint8_t *b)
 {
-    unsigned long secsTwistEvent = (g_tick - g_tickTwistEvent) / TICK_HZ;
+    unsigned long secs = g_tick / TICK_HZ;
 
     LedPattern lp = LP_DIM;
-    if (secsTwistEvent < 5)
+    if (secs < 5)
         lp = LP_ON;
-    else if (g_pomoParam.periodOnce && g_pomoParam.periodSecs <= secsTwistEvent)
+    else if (g_pomoParam.periodOnce && g_pomoParam.periodSecs <= secs)
         lp = LP_BLINK_STROBE;
-    else if ((secsTwistEvent + 30) % g_pomoParam.periodSecs < 30)
+    else if ((secs + 30) % g_pomoParam.periodSecs < 30)
         lp = LP_BLINK_SLOW;
 
     LedPatternParam param;
@@ -246,16 +285,11 @@ void tickTwistLed()
     uint8_t b = 0xFF;
 
     switch (g_mode) {
-    case BM_INIT:
-        getRgbInit(&r, &g, &b);
+    case BM_RAINBOW:
+        getRgbRainbow(&r, &g, &b);
         break;
     case BM_POMO:
         getRgbPomo(&r, &g, &b);
-        break;
-    case BM_SLEEP:
-        r = 0xFF >> DIM_SHIFT_STD;
-        g = 0;
-        b = 0;
         break;
     default:
         break;
@@ -272,11 +306,12 @@ void loop()
         return;
 
     if (eventTwistButton()
-        || eventTwistRotation())
+        || eventTwistRotation()
+        || eventRtcHour())
         return;
 
-    g_tick++;
     tickTwistLed();
 
+    g_tick++;
     while (usec_end > micros()) {}
 }
