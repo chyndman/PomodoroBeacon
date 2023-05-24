@@ -177,6 +177,7 @@ void setup()
     g_twist.setCount(0);
 
     g_rtc.begin();
+    g_rtc.set24Hour();
     g_rtc.updateTime();
 #ifdef RTC_SET_BUILD
     g_rtc.setToCompilerTime();
